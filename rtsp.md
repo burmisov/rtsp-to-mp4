@@ -12,7 +12,7 @@ RTSP
 ```js
 const RtspConnection = require('./rtsp');
 
-const rtspCon = new RtspConnection('rtsp://host.name/sdp-path?params');
+const rtspCon = new RtspConnection('rtsp://host.name/sdp-path');
 
 rtspCon.on('end', () => {
   console.log('Рассоединение!');
@@ -23,7 +23,7 @@ rtspCon.on('connect', () => {
     'User-Agent': 'here I am',
   };
 
-  rtspCon.request('OPTIONS', {}, response => {
+  rtspCon.request('OPTIONS', '/addPath', {}, response => {
     console.log(response);
   });
 });

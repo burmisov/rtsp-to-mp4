@@ -127,12 +127,16 @@ module.exports = class RtspConnection extends EventEmitter {
       this.disconnected = true;
       this.emit('end');
     });
+    this.socket.on('error', err => {
+      debug('socket error');
+      this.emit('error', err);
+    });
     // TODO
   }
 
   // method: OPTIONS/DESCRIBE/...
   // headers: { CSeq: 13, 'User-agent': 'me' }
-  sendRequest(method, headers, body) {
+  sendRequest(method, addPath, headers, body) {
     if (!method) {
       throw new Error('Method should be defined.');
     }
@@ -157,7 +161,7 @@ module.exports = class RtspConnection extends EventEmitter {
     this.socket.write(reqString);
   }
 
-  request(method, headers, callback) {
+  request(method, addPath, headers, callback) {
     if (!(method && callback)) {
       throw new Error('Method and callback must be provided.');
     }
@@ -170,6 +174,7 @@ module.exports = class RtspConnection extends EventEmitter {
     this.requests[this.currentCSeq] = {
       CSeq: this.currentCSeq,
       method,
+      addPath,
       originalHeaders: headersToUse,
       callback,
     };
@@ -179,7 +184,7 @@ module.exports = class RtspConnection extends EventEmitter {
       'User-Agent': this.userAgent,
     });
 
-    this.sendRequest(method, headersToSend);
+    this.sendRequest(method, addPath, headersToSend);
   }
 
   handleData(data) {
@@ -212,71 +217,78 @@ module.exports = class RtspConnection extends EventEmitter {
       // ref https://github.com/request/request/blob/473cae3c89683885de2c6b73c2a7c3b4c43ce56a/lib/auth.js#L51
 
       this.needAuth = true;
+      this.responseAuthHeader = c.get('www-authenticate');
 
-      const authHeader = c.get('www-authenticate');
-      const authVerb = authHeader && authHeader.split(' ')[0].toLowerCase();
+      const authVerb = this.responseAuthHeader &&
+        this.responseAuthHeader.split(' ')[0].toLowerCase()
+      ;
       if (authVerb !== 'digest') {
         throw new Error(`Авторизация ${authVerb} не поддерживается.`);
       }
 
-      const challenge = {};
-      const re = /([a-z0-9_-]+)=(?:"([^"]+)"|([a-z0-9_-]+))/gi;
-      for (;;) {
-        const match = re.exec(authHeader);
-        if (!match) { break; }
-        challenge[match[1]] = match[2] || match[3];
-      }
-
-      const qop = /(^|,)\s*auth\s*($|,)/.test(challenge.qop) && 'auth';
-      const nc = qop && '00000001';
-      const cnonce = qop && uuid().replace(/-/g, '');
-      const ha1 = ha1Compute(
-        challenge.algorithm, this.username, challenge.realm,
-        this.password, challenge.nonce, cnonce
-      );
-      const ha2 = md5(`${request.method}:${this.fullUrl}`);
-      const digestResponse = qop ?
-        md5(`${ha1}:${challenge.nonce}:${nc}:${cnonce}:${qop}:${ha2}`) :
-        md5(`${ha1}:${challenge.nonce}:${ha2}`)
-      ;
-      const authValues = {
-        username: this.username,
-        realm: challenge.realm,
-        nonce: challenge.nonce,
-        uri: this.fullUrl,
-        qop,
-        response: digestResponse,
-        nc,
-        cnonce,
-        algorithm: challenge.algorithm,
-        opaque: challenge.opaque,
-      };
-
-      const authParts = Object.keys(authValues).reduce(
-        (result, k) => {
-          if (authValues[k]) {
-            if (k === 'qop' || k === 'nc' || k === 'algorith') {
-              return result.concat([`${k}=${authValues[k]}`]);
-            }
-            return result.concat([`${k}="${authValues[k]}"`]);
-          }
-          return result;
-        },
-        []
-      );
-
-      this.authHeader = `Digest ${authParts.join(', ')}`;
-
       return this.request(
         request.method,
+        request.addPath,
         Object.assign({}, request.originalHeaders, {
-          Authorization: this.authHeader,
+          Authorization: this.calcDigestAuth(
+            request.method, request.addPath, this.responseAuthHeader
+          ),
         }),
         request.callback
       );
     }
 
     return request.callback(null, response);
+  }
+
+  calcDigestAuth(method, addPath, authHeader) {
+    const challenge = {};
+    const re = /([a-z0-9_-]+)=(?:"([^"]+)"|([a-z0-9_-]+))/gi;
+    for (;;) {
+      const match = re.exec(authHeader);
+      if (!match) { break; }
+      challenge[match[1]] = match[2] || match[3];
+    }
+
+    const qop = /(^|,)\s*auth\s*($|,)/.test(challenge.qop) && 'auth';
+    const nc = qop && '00000001';
+    const cnonce = qop && uuid().replace(/-/g, '');
+    const ha1 = ha1Compute(
+      challenge.algorithm, this.username, challenge.realm,
+      this.password, challenge.nonce, cnonce
+    );
+    const ha2 = md5(`${method}:${this.fullUrl + addPath}`);
+    const digestResponse = qop ?
+      md5(`${ha1}:${challenge.nonce}:${nc}:${cnonce}:${qop}:${ha2}`) :
+      md5(`${ha1}:${challenge.nonce}:${ha2}`)
+    ;
+    const authValues = {
+      username: this.username,
+      realm: challenge.realm,
+      nonce: challenge.nonce,
+      uri: this.fullUrl + addPath,
+      qop,
+      response: digestResponse,
+      nc,
+      cnonce,
+      algorithm: challenge.algorithm,
+      opaque: challenge.opaque,
+    };
+
+    const authParts = Object.keys(authValues).reduce(
+      (result, k) => {
+        if (authValues[k]) {
+          if (k === 'qop' || k === 'nc' || k === 'algorith') {
+            return result.concat([`${k}=${authValues[k]}`]);
+          }
+          return result.concat([`${k}="${authValues[k]}"`]);
+        }
+        return result;
+      },
+      []
+    );
+
+    return `Digest ${authParts.join(', ')}`;
   }
 
 };
