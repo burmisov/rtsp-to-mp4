@@ -170,11 +170,22 @@ module.exports = class RtspConnection extends EventEmitter {
 
     // TODO: Авторизация if (response.status === 401) { ... }
 
-    const CSeq = response.headers.CSeq;
+    // CSeq называется по-разному (разный case), так что надо его найти
+    let CSeqName;
+    Object.keys(response.headers).forEach(key => {
+      if (key.toLowerCase() === 'cseq') {
+        CSeqName = key;
+      }
+    });
+    if (!CSeqName) {
+      throw new Error('В ответе отсутствует CSeq');
+    }
+
+    const CSeq = response.headers[CSeqName];
 
     if (!CSeq) {
       // TODO
-      throw new Error('В ответе нет Cseq');
+      throw new Error('В ответе отсутствует Cseq');
     }
 
     const request = this.requests[CSeq];
