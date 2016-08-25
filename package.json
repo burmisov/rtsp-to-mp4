@@ -3,7 +3,9 @@
   "version": "1.0.0",
   "description": "Подборка материала ==================",
   "main": "rtsp.js",
-  "dependencies": {},
+  "dependencies": {
+    "debug": "^2.2.0"
+  },
   "devDependencies": {
     "eslint": "^3.3.1",
     "eslint-config-airbnb-base": "^5.0.3",
