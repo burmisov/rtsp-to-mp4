@@ -1,6 +1,8 @@
 Подборка материала
 ==================
 
+[Текущий прогресс тут](./progress.md)
+
 Материал для работы (RTSP -> mp4-фрагменты):
 - [RFC2326](https://tools.ietf.org/html/rfc2326) RTSP
 - [RFC7616](https://tools.ietf.org/html/rfc7616) Digest-авторизация
