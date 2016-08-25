@@ -6,6 +6,9 @@ const debug = require('debug')('rtsp:rtsp');
 const net = require('net');
 const events = require('events');
 const url = require('url');
+const crypto = require('crypto');
+const caseless = require('caseless');
+const uuid = require('node-uuid');
 
 const EventEmitter = events.EventEmitter;
 
@@ -41,6 +44,20 @@ function parseResponse(data) {
     headers,
     body,
   };
+}
+
+function md5(str) {
+  return crypto.createHash('md5').update(str).digest('hex');
+}
+
+function ha1Compute(algorithm, user, realm, pass, nonce, cnonce) {
+  const ha1 = md5(`${user}:${realm}:${pass}`);
+
+  if (algorithm && algorithm.toLowerCase() === 'md5-sess') {
+    return md5(`${ha1}:${nonce}:${cnonce}`);
+  }
+
+  return ha1;
 }
 
 module.exports = class RtspConnection extends EventEmitter {
@@ -135,6 +152,8 @@ module.exports = class RtspConnection extends EventEmitter {
     if (body) { reqString += body; }
     reqString += '\r\n;';
 
+    debug('writing to socket: %s', reqString);
+
     this.socket.write(reqString);
   }
 
@@ -170,18 +189,9 @@ module.exports = class RtspConnection extends EventEmitter {
 
     // TODO: Авторизация if (response.status === 401) { ... }
 
-    // CSeq называется по-разному (разный case), так что надо его найти
-    let CSeqName;
-    Object.keys(response.headers).forEach(key => {
-      if (key.toLowerCase() === 'cseq') {
-        CSeqName = key;
-      }
-    });
-    if (!CSeqName) {
-      throw new Error('В ответе отсутствует CSeq');
-    }
+    const c = caseless(response.headers);
 
-    const CSeq = response.headers[CSeqName];
+    const CSeq = c.get('CSeq');
 
     if (!CSeq) {
       // TODO
@@ -197,7 +207,76 @@ module.exports = class RtspConnection extends EventEmitter {
 
     delete this.requests[CSeq];
 
-    request.callback(null, response);
+    if (response.status === 401) {
+      // Требуется авторизация
+      // ref https://github.com/request/request/blob/473cae3c89683885de2c6b73c2a7c3b4c43ce56a/lib/auth.js#L51
+
+      this.needAuth = true;
+
+      const authHeader = c.get('www-authenticate');
+      const authVerb = authHeader && authHeader.split(' ')[0].toLowerCase();
+      if (authVerb !== 'digest') {
+        throw new Error(`Авторизация ${authVerb} не поддерживается.`);
+      }
+
+      const challenge = {};
+      const re = /([a-z0-9_-]+)=(?:"([^"]+)"|([a-z0-9_-]+))/gi;
+      for (;;) {
+        const match = re.exec(authHeader);
+        if (!match) { break; }
+        challenge[match[1]] = match[2] || match[3];
+      }
+
+      const qop = /(^|,)\s*auth\s*($|,)/.test(challenge.qop) && 'auth';
+      const nc = qop && '00000001';
+      const cnonce = qop && uuid().replace(/-/g, '');
+      const ha1 = ha1Compute(
+        challenge.algorithm, this.username, challenge.realm,
+        this.password, challenge.nonce, cnonce
+      );
+      const ha2 = md5(`${request.method}:${this.fullUrl}`);
+      const digestResponse = qop ?
+        md5(`${ha1}:${challenge.nonce}:${nc}:${cnonce}:${qop}:${ha2}`) :
+        md5(`${ha1}:${challenge.nonce}:${ha2}`)
+      ;
+      const authValues = {
+        username: this.username,
+        realm: challenge.realm,
+        nonce: challenge.nonce,
+        uri: this.fullUrl,
+        qop,
+        response: digestResponse,
+        nc,
+        cnonce,
+        algorithm: challenge.algorithm,
+        opaque: challenge.opaque,
+      };
+
+      const authParts = Object.keys(authValues).reduce(
+        (result, k) => {
+          if (authValues[k]) {
+            if (k === 'qop' || k === 'nc' || k === 'algorith') {
+              return result.concat([`${k}=${authValues[k]}`]);
+            }
+            return result.concat([`${k}="${authValues[k]}"`]);
+          }
+          return result;
+        },
+        []
+      );
+
+      this.authHeader = `Digest ${authParts.join(', ')}`;
+
+      return this.request(
+        request.method,
+        Object.assign({}, request.originalHeaders, {
+          Authorization: this.authHeader,
+        }),
+        request.callback
+      );
+    }
+
+    return request.callback(null, response);
   }
 
 };
