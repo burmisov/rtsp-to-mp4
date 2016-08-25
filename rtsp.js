@@ -184,6 +184,12 @@ module.exports = class RtspConnection extends EventEmitter {
       'User-Agent': this.userAgent,
     });
 
+    if (this.needAuth) {
+      headersToSend.Authorization = this.calcDigestAuth(
+        method, addPath, this.responseAuthHeader
+      );
+    }
+
     this.sendRequest(method, addPath, headersToSend);
   }
 
