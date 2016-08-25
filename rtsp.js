@@ -195,6 +195,8 @@ module.exports = class RtspConnection extends EventEmitter {
       throw new Error(`Пришёл ответ с CSeq=${CSeq}, на который не ожидается ответ`);
     }
 
+    delete this.requests[CSeq];
+
     request.callback(null, response);
   }
 
